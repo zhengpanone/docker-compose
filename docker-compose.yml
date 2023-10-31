@@ -1,0 +1,82 @@
+version: '3.1'
+services:
+  mysql:
+    container_name: 'mysql'
+    image: mysql:5.7
+    privileged: true
+    # restart: always
+    ports:
+      - "3306:3306"
+    environment: 
+      MYSQL_ROOT_PASSWORD: 'root'
+      # MYSQL_ALLOW_EMPTY_PASSWORD: 'no'
+      TZ: Asia/Shanghai
+    volumes:
+      - /opt/dockerstore/mysql/data:/var/lib/mysql
+      - /opt/dockerstore/mysql/logs:/logs
+      - /opt/dockerstore/mysql/conf:/etc/mysql/conf.d
+      # - ./init:/docker-entrypoint-initdb.d/   # sql初始化目录
+
+    command:
+      --max_connections=1000
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_general_ci
+      --default-authentication-plugin=mysql_native_password
+
+  redis:
+    container_name: redis
+    image: redis
+    privileged: true
+    ports:
+      - "6379:6379"
+    volumes:
+      - /opt/dockerstore/redis/redis.conf:/etc/redis/redis.conf
+      - /opt/dockerstore/redis/data:/data
+    command: redis-server /etc/redis/redis.conf
+
+  mongodb:
+    container_name: mongodb
+    image: mongo:5.0.10-focal
+    ports:
+      - "27017:27017"
+    restart: always
+    command:
+      - "--auth"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: root
+      wiredTigerCacheSizeGB: 2
+    volumes:
+      - "/opt/dockerstore/mongo/data:/data/db"
+      - "/opt/dockerstore/mongo/logs:/var/log/mongodb"
+      - "/opt/dockerstore/mongo/config:/etc/mongo"
+      - "/usr/share/zoneinfo/Asia/Shanghai:/etc/localtime"
+
+  mongo-express:
+    image: mongo-express
+    container_name: mongo-express
+    restart: always
+    ports:
+      - "8081:8081"
+    environment:
+      ME_CONFIG_MONGODB_SERVER: mongodb
+      ME_CONFIG_MONGODB_ENABLE_ADMIN: false
+      ME_CONFIG_MONGODB_ADMINUSERNAME: root
+      ME_CONFIG_MONGODB_ADMINPASSWORD: root
+      ME_CONFIG_BASICAUTH_USERNAME: root
+      ME_CONFIG_BASICAUTH_PASSWORD: root
+      # ME_CONFIG_MONGODB_URL: mongodb://root:root@mongo:27017/
+    depends_on:
+      - mongodb
+  nginx:
+    container_name: nginx
+    image: nginx
+    ports:
+      - "9998:80"
+    environment:
+      TZ: Asia/Shanghai
+    volumes:
+      - /opt/dockerstore/nginx/html:/etc/nginx/html
+      - /opt/dockerstore/nginx/conf.d:/etc/nginx/conf.d
+      - /opt/dockerstore/nginx/log:/var/log/nginx
+
