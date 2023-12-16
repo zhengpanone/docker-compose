@@ -119,11 +119,14 @@ services:
     privileged: true
     restart: always
     ports:
-      - "9980:80"
-      - "9922:22"
+      - "9980:9980"
+      - "2224:2224"
     environment: 
+      GITLAB_OMNIBUS_CONFIG: |
+        external_url 'http://192.168.1.120:9980'
+        gitlab_rails['gitlab_shell_ssh_port'] = 2224
       TZ: Asia/Shanghai
     volumes:
-      - /data/gitlab/etc:/etc/gitlab
-      - /data/gitlab/log:/var/log/gitlab 
-      - /data/gitlab/opt:/var/opt/gitlab
+      - /data/gitlab/config:/etc/gitlab
+      - /data/gitlab/logs:/var/log/gitlab 
+      - /data/gitlab/data:/var/opt/gitlab
