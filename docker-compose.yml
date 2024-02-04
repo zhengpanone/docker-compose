@@ -130,3 +130,21 @@ services:
       - /data/gitlab/config:/etc/gitlab
       - /data/gitlab/logs:/var/log/gitlab 
       - /data/gitlab/data:/var/opt/gitlab
+
+  neo4j:
+    image: neo4j:latest
+    container_name: neo4j
+    restart: always
+    environment:
+      - NEO4J_AUTH=neo4j/neo4j # 默认用户名密码
+      - NEO4J_dbms_memory_heap_maxSize=4G
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - /opt/dockerstore/neo4j/data:/data
+      - /opt/dockerstore/neo4j/config:/var/lib/neo4j/conf
+      - /opt/dockerstore/neo4j/import:/var/lib/neo4j/import
+      - /opt/dockerstore/neo4j/plugins:/plugins
+      - /opt/dockerstore/neo4j/logs:/var/lib/neo4j/logs
+
