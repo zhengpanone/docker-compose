@@ -23,6 +23,21 @@ services:
       --collation-server=utf8mb4_general_ci
       --default-authentication-plugin=mysql_native_password
 
+
+  postgres:
+    image: postgres:latest
+    container_name: postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - 15432:5432
+    volumes:
+      - /opt/dockerstore/postgres/data:/var/lib/postgresql/data
+      - /etc/localtime:/etc/localtime:ro #将外边时间直接挂载到容器内部，权限只读
+    restart: always
+
+
   redis:
     container_name: redis
     image: redis
