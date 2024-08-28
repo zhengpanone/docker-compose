@@ -1,10 +1,22 @@
 version: '3.1'
 services:
+
+  portainer:
+    image: portainer/portainer:latest
+    container_name: portainer
+    ports:
+    - "9000:9000"
+    volumes:
+    - /opt/dockerstore/portainer/data:/data
+    - /var/run/docker.sock:/var/run/docker.sock
+
+
   mysql:
+    hostname: mysql
     container_name: 'mysql'
     image: mysql:5.7
     privileged: true
-    # restart: always
+    restart: always
     ports:
       - "3306:3306"
     environment: 
@@ -13,8 +25,8 @@ services:
       TZ: Asia/Shanghai
     volumes:
       - /opt/dockerstore/mysql/data:/var/lib/mysql
-      - /opt/dockerstore/mysql/logs:/logs
-      - /opt/dockerstore/mysql/conf:/etc/mysql/conf.d
+      - /opt/dockerstore/mysql/logs:/var/log/mysql
+      - /opt/dockerstore/mysql/conf/my.cnf:/etc/mysql/conf.d/my.cnf
       # - ./init:/docker-entrypoint-initdb.d/   # sql初始化目录
 
     command:
@@ -22,6 +34,11 @@ services:
       --character-set-server=utf8mb4
       --collation-server=utf8mb4_general_ci
       --default-authentication-plugin=mysql_native_password
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+          cpus: "0.5"
 
 
   postgres:
@@ -37,6 +54,15 @@ services:
       - /etc/localtime:/etc/localtime:ro #将外边时间直接挂载到容器内部，权限只读
     restart: always
 
+
+  oracle_11g:
+    image: registry.cn-hangzhou.aliyuncs.com/helowin/oracle_11g:latest
+    container_name: oracle_11g
+    ports:
+      - 1521:1521
+    # volumes:
+    #   - /opt/dockerstore/oracle_11g/data:/home/oracle/app/oracle/oradata
+    # restart: always
 
   redis:
     container_name: redis
@@ -163,3 +189,99 @@ services:
       - /opt/dockerstore/neo4j/plugins:/plugins
       - /opt/dockerstore/neo4j/logs:/var/lib/neo4j/logs
 
+  jenkins:
+    image: jenkins/jenkins:2.426.1-lts
+    container_name: jenkins
+    restart: always
+    privileged: true
+    environment:
+      - TZ=Asia/Shanghai
+    ports:
+      - 8085:8080
+      - 50000:50000
+    volumes:
+      - /data/jenkins/jenkins-data:/var/jenkins_home
+      - /data/jenkins/jenkins-docker-certs:/certs/client:ro
+
+  consul:
+    image: consul:latest
+    container_name: consul
+    ports:
+      - "8300:8300" # 这是 Consul 服务器节点之间通信的端口。主要用于服务器节点间的 RPC (远程过程调用) 通信，例如进行领导选举、状态复制等。
+      - "8301:8301" # 这个端口被用于 Consul 节点之间的 Serf LAN (局域网) 通信。Serf 是一个用于集群成员管理、故障检测和编排的工具，Consul 利用它进行健康检查和跟踪集群中的成员。8301 端口使用 TCP 和 UDP 协议。
+      - "8302:8302" # 这个端口被用于 Consul 节点间的 Serf WAN (广域网) 通信。如果您有多个数据中心，它们将通过此端口相互通信确定其他数据中心的 Consul 节点的健康状况。同样，8302 端口同时支持 TCP 和 UDP 协议。
+      - "8500:8500" # Consul HTTP 界面所用的端口
+      - "8600:8600/udp" # Consul DNS 服务器所用的端口
+    command: agent -dev -ui -client 0.0.0.0 # -dev 表示启动一个开发模式的 Consul 服务，-ui 开启用户界面，-client 0.0.0.0 允许来自宿主机的所有IP连接至Consul服务
+    volumes:
+      - /opt/dockerstore/consul/data:/consul/data # 将宿主机当前目录下的 consul_data 目录挂载到容器的 /consul/data
+    restart: always
+
+  jaeger:
+    container_name: jaeger
+    image: jaegertracing/all-in-one:latest
+    privileged: true
+    ports:
+      - "5775:5775/udp"
+      - "6831:6831/udp"
+      - "6832:6832/udp"
+      - "5778:5778"
+      - "16686:16686"
+      - "14268:14268"
+      - "14250:14250"
+      - "9411:9411"
+    environment:
+      COLLECTOR_ZIPKIN_HTTP_PORT: 9411
+
+  sentinel:
+    image: bladex/sentinel-dashboard:1.8.4
+    container_name: sentinel-dashboard
+    ports:
+      - "8858:8858"
+    environment:
+      JAVA_OPTS: "-Dserver.port=8858 -Dcsp.sentinel.dashboard.server=localhost:8858 -Dproject.name=sentinel-dashboard"
+    networks:
+      - sentinel-network
+
+
+
+  # Kong Migrations，用于初始化数据库
+  kong-migrations:
+    image: kong:3.5
+    depends_on:
+      - postgres
+    environment:
+      KONG_DATABASE: postgres
+      KONG_PG_HOST: postgres
+      KONG_PG_USER: kong
+      KONG_PG_PASSWORD: kong
+      KONG_CASSANDRA_CONTACT_POINTS: kong-database
+    command: ["kong", "migrations", "bootstrap"]
+
+  # Kong API 网关
+  kong:
+    image: kong:3.5
+    depends_on:
+      - postgres
+      - kong-migrations
+    environment:
+      KONG_DATABASE: postgres
+      KONG_PG_HOST: postgres
+      KONG_PG_USER: kong
+      KONG_PG_PASSWORD: kong
+      KONG_PROXY_ACCESS_LOG: /dev/stdout
+      KONG_ADMIN_ACCESS_LOG: /dev/stdout
+      KONG_PROXY_ERROR_LOG: /dev/stderr
+      KONG_ADMIN_ERROR_LOG: /dev/stderr
+      KONG_ADMIN_LISTEN: 0.0.0.0:8001
+    ports:
+      - "8000:8000"  # Proxy端口
+      - "8443:8443"  # Proxy HTTPS端口
+      - "8001:8001"  # 管理API端口
+      - "8444:8444"  # 管理API HTTPS端口
+
+      
+
+networks:
+  sentinel-network:
+    driver: bridge
