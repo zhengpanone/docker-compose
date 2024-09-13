@@ -1,0 +1,30 @@
+version: '3'
+services:
+  # 主节点
+  master:
+    image: redis
+    # 主节点名称
+    container_name: redis-master
+    # 设置redis登录密码、从节点连接主节点的密码
+    command: redis-server --requirepass xxxx--masterauth xxxx
+    ports:
+    # 对外暴露端口号为16379
+    - 16379:6379
+  # 从节点
+  slave1:
+    image: redis
+    container_name: redis-slave-1
+    ports:
+    # 对外暴露端口号为16380
+    - 16380:6379
+    # 启动redis 从属于容器名为 redis-master的redis，端口号为容器端口号而不是对外映射端口号，设置连接密码，连接主节点的密码
+    command:  redis-server --slaveof redis-master 6379 --requirepass xxxx--masterauth xxxxx
+  # 从节点2
+  slave2:
+    image: redis
+    container_name: redis-slave-2
+    ports:
+    - 16381:6379
+    command: redis-server --slaveof redis-master 6379 --requirepass xxxxx --masterauth xxxxx
+
+# docker-compose -f redis-cluster.yml up 
