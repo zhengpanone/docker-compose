@@ -27,7 +27,6 @@ services:
       - /opt/dockerstore/mysql/logs:/var/log/mysql
       - /opt/dockerstore/mysql/conf/my.cnf:/etc/mysql/conf.d/my.cnf
       # - ./init:/docker-entrypoint-initdb.d/   # sql初始化目录
-
     command:
       --max_connections=1000
       --character-set-server=utf8mb4
@@ -163,36 +162,37 @@ services:
   #   depends_on:
   #     - mysql
 
-  # nexus:
-  #   image: sonatype/nexus3
-  #   container_name: nexus3
-  #   restart: always
-  #   privileged: true
-  #   environment:
-  #     - TZ=Asia/Shanghai
-  #   ports:
-  #     - 8082:8081
-  #   volumes:
-  #     - /data/nexus/nexus-data:/nexus-data
+  nexus:
+    image: sonatype/nexus3
+    container_name: nexus3
+    restart: always
+    privileged: true
+    environment:
+      - TZ=Asia/Shanghai
+    ports:
+      - 8082:8081
+    volumes:
+      - /opt/dockerstore/nexus/nexus-data:/nexus-data
 
-  # gitlab:
-  #   container_name: 'gitlab'
-  #   hostname: 'gitlab'
-  #   image: gitlab/gitlab-ce
-  #   privileged: true
-  #   restart: always
-  #   ports:
-  #     - "9980:9980"
-  #     - "2224:2224"
-  #   environment: 
-  #     GITLAB_OMNIBUS_CONFIG: |
-  #       external_url 'http://192.168.1.120:9980'
-  #       gitlab_rails['gitlab_shell_ssh_port'] = 2224
-  #     TZ: Asia/Shanghai
-  #   volumes:
-  #     - /data/gitlab/config:/etc/gitlab
-  #     - /data/gitlab/logs:/var/log/gitlab 
-  #     - /data/gitlab/data:/var/opt/gitlab
+  gitlab:
+    container_name: 'gitlab'
+    hostname: 'gitlab'
+    image: gitlab/gitlab-ce:latest
+    privileged: true
+    restart: always
+    ports:
+      - '9980:80'
+      - '2224:22'
+      - '2443:443'
+    environment: 
+      GITLAB_OMNIBUS_CONFIG: |
+        external_url 'http://127.0.0.1:9980'
+        gitlab_rails['gitlab_shell_ssh_port'] = 2224
+      TZ: Asia/Shanghai
+    volumes:
+      - /opt/dockerstore/gitlab/config:/etc/gitlab:z
+      - /opt/dockerstore/gitlab/logs:/var/log/gitlab:z 
+      - /opt/dockerstore/gitlab/data:/var/opt/gitlab:z
 
   # neo4j:
   #   image: neo4j:latest
@@ -337,7 +337,7 @@ services:
         condition: service_started
     environment:
       KONG_DATABASE: postgres
-      KONG_PG_HOST: 172.18.0.2
+      KONG_PG_HOST: postgres
       KONG_PG_USER: postgres
       KONG_PG_PASSWORD: postgres
       KONG_PROXY_ACCESS_LOG: /dev/stdout
@@ -345,7 +345,8 @@ services:
       KONG_PROXY_ERROR_LOG: /dev/stderr
       KONG_ADMIN_ERROR_LOG: /dev/stderr
       KONG_ADMIN_LISTEN: 0.0.0.0:8001
-      KONG_DNS_RESOLVER: "172.18.0.4:8600"
+      KONG_DNS_RESOLVER: "8.8.8.8,8.8.4.4" # 可选的 DNS 解析器
+      KONG_CONSUL_HOST: consul
       KONG_LOG_LEVEL: info
     command: >
       kong start -c /etc/kong/kong.conf
