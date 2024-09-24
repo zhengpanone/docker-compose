@@ -44,6 +44,7 @@ services:
     image: postgres:latest
     container_name: postgres
     hostname: postgres
+    restart: always
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
@@ -52,7 +53,6 @@ services:
     volumes:
       - /opt/dockerstore/postgres/data:/var/lib/postgresql/data
       - /etc/localtime:/etc/localtime:ro #将外边时间直接挂载到容器内部，权限只读
-    restart: always
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "postgres"]
       interval: 10s
@@ -94,25 +94,37 @@ services:
           cpus: "0.5"
     networks:
       - my-network
-
+# 容器内执行：mongo -u root -p root --authenticationDatabase admin
   mongodb:
     container_name: mongodb
     hostname: mogodb
     image: mongo:5.0.10-focal
+    restart: always
     ports:
       - "27017:27017"
-    restart: always
     command:
       - "--auth"
+      - "--wiredTigerCacheSizeGB=2"
     environment:
       MONGO_INITDB_ROOT_USERNAME: root
       MONGO_INITDB_ROOT_PASSWORD: root
-      wiredTigerCacheSizeGB: 2
+      
     volumes:
       - "/opt/dockerstore/mongo/data:/data/db"
       - "/opt/dockerstore/mongo/logs:/var/log/mongodb"
       - "/opt/dockerstore/mongo/config:/etc/mongo"
       - "/usr/share/zoneinfo/Asia/Shanghai:/etc/localtime"
+    healthcheck:
+      test: ["CMD", "mongo", "--eval", "db.adminCommand('ping')"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"      # 每个日志文件最大 10MB
+        max-file: "5"        # 最多保留 5 个日志文件
 
   mongo-express:
     image: mongo-express
@@ -163,9 +175,9 @@ services:
   #     - mysql
 
   nexus:
-    image: sonatype/nexus3
+    image: sonatype/nexus
     container_name: nexus3
-    restart: always
+    # restart: always
     privileged: true
     environment:
       - TZ=Asia/Shanghai
@@ -179,14 +191,14 @@ services:
     hostname: 'gitlab'
     image: gitlab/gitlab-ce:latest
     privileged: true
-    restart: always
+    # restart: always
     ports:
       - '9980:80'
       - '2224:22'
       - '2443:443'
     environment: 
       GITLAB_OMNIBUS_CONFIG: |
-        external_url 'http://127.0.0.1:9980'
+        external_url 'http://127.0.0.1:80'
         gitlab_rails['gitlab_shell_ssh_port'] = 2224
       TZ: Asia/Shanghai
     volumes:
@@ -214,7 +226,7 @@ services:
   jenkins:
     image: jenkins/jenkins:2.462.2-lts-jdk17
     container_name: jenkins
-    restart: always
+    # restart: always
     privileged: true
     environment:
       - TZ=Asia/Shanghai
@@ -267,6 +279,7 @@ services:
     hostname: consul
     image: consul:1.15.4
     container_name: consul
+    restart: always
     ports:
       - "8300:8300" # 这是 Consul 服务器节点之间通信的端口。主要用于服务器节点间的 RPC (远程过程调用) 通信，例如进行领导选举、状态复制等。
       - "8301:8301" # 这个端口被用于 Consul 节点之间的 Serf LAN (局域网) 通信。Serf 是一个用于集群成员管理、故障检测和编排的工具，Consul 利用它进行健康检查和跟踪集群中的成员。8301 端口使用 TCP 和 UDP 协议。
@@ -276,7 +289,7 @@ services:
     command: agent -dev -ui -client 0.0.0.0 # -dev 表示启动一个开发模式的 Consul 服务，-ui 开启用户界面，-client 0.0.0.0 允许来自宿主机的所有IP连接至Consul服务
     volumes:
       - /opt/dockerstore/consul/data:/consul/data # 将宿主机当前目录下的 consul_data 目录挂载到容器的 /consul/data
-    restart: always
+    
     deploy:
       resources:
         limits:
@@ -332,6 +345,7 @@ services:
   kong:
     image: kong:3.5
     container_name: kong
+    restart: always
     depends_on:
       kong-migrations:
         condition: service_started
@@ -359,7 +373,6 @@ services:
       - "8443:8443"  # Proxy HTTPS端口
       - "8001:8001"  # 管理API端口
       - "8444:8444"  # 管理API HTTPS端口
-    restart: always
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8001/status"]
       interval: 10s
@@ -386,6 +399,25 @@ services:
       - /opt/dockerstore/konga/kongadata:/app/kongadata  
     networks:
       - my-network
+
+  rabbitmq:
+    image: rabbitmq:3.10-management
+    container_name: rabbitmq
+    ports:
+      - "15673:15672"
+      - "5673:5672"
+    # hostname: rabbitmq
+    # restart: always
+    privileged: true
+    environment:
+      - TZ=Asia/Shanghai
+      - LANG=en_US.UTF-8
+      - RABBITMQ_DEFAULT_USER=admin
+      - RABBITMQ_DEFAULT_PASS=admin
+    volumes:
+      - /opt/dockerstore/rabbitmq/data:/var/lib/rabbitmq        # 防止log日志报failed to open log file
+      - /opt/dockerstore/rabbitmq/conf/rabbitmq.conf/etc/rabbitmq/rabbitmq.conf
+      - /opt/dockerstore/rabbitmq/log:/var/log/rabbitmq
 
 networks:
   my-network:
