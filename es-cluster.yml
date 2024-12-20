@@ -1,5 +1,17 @@
 version: '3'
 services:
+    # 生成 elastic-certificates.p12
+  cert_generator:
+    image: elasticsearch:7.14.1
+    container_name: cert_generator
+    entrypoint:
+      [
+        "/bin/bash",
+        "-c",
+        "rm -f /usr/share/elasticsearch/config/elastic-certificates.p12 && elasticsearch-certutil cert --silent --pem --out /usr/share/elasticsearch/config/elastic-certificates.p12",
+      ]
+    volumes:
+      - ./elasticsearch/config/:/usr/share/elasticsearch/config
   es01:
     image: elasticsearch:7.14.1
     container_name: es01

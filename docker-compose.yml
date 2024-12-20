@@ -22,7 +22,7 @@ services:
       - CATTLE_BOOTSTRAP_PASSWORD=admin123 # 初始密码，启动后可更改
 
   registry:
-    image: registry:latest
+    image: registry:latestEE
     container_name: registry
     hostname: registry
     ports:
@@ -49,7 +49,8 @@ services:
   mysql:
     hostname: mysql
     container_name: "mysql"
-    image: mysql:5.7
+    #image: mysql:5.7
+    image: mysql:8.0.24
     privileged: true
     restart: always
     ports:
@@ -61,7 +62,7 @@ services:
     volumes:
       - /opt/dockerstore/mysql/data:/var/lib/mysql
       - /opt/dockerstore/mysql/logs:/var/log/mysql
-      - /opt/dockerstore/mysql/conf/my.cnf:/etc/mysql/conf.d/my.cnf
+      - /opt/dockerstore/mysql/conf.d/:/etc/mysql/conf.d/
       # - ./init:/docker-entrypoint-initdb.d/   # sql初始化目录
     command: --max_connections=1000
       --character-set-server=utf8mb4
@@ -115,6 +116,7 @@ services:
     image: redis
     hostname: redis
     privileged: true
+    restart: always
     ports:
       - "6379:6379"
     volumes:
@@ -142,12 +144,11 @@ services:
     environment:
       MONGO_INITDB_ROOT_USERNAME: root
       MONGO_INITDB_ROOT_PASSWORD: root
-
     volumes:
       - "/opt/dockerstore/mongo/data:/data/db"
       - "/opt/dockerstore/mongo/logs:/var/log/mongodb"
       - "/opt/dockerstore/mongo/config:/etc/mongo"
-      - "/usr/share/zoneinfo/Asia/Shanghai:/etc/localtime"
+      # - "/usr/share/zoneinfo/Asia/Shanghai:/etc/localtime"
     healthcheck:
       test: ["CMD", "mongo", "--eval", "db.adminCommand('ping')"]
       interval: 30s
@@ -163,7 +164,7 @@ services:
   mongo-express:
     image: mongo-express
     container_name: mongo-express
-    restart: always
+    # restart: always
     ports:
       - "8081:8081"
     environment:
@@ -176,6 +177,7 @@ services:
       # ME_CONFIG_MONGODB_URL: mongodb://root:root@mongo:27017/
     depends_on:
       - mongodb
+
   nginx:
     container_name: nginx
     image: nginx
@@ -257,6 +259,25 @@ services:
   #     - /opt/dockerstore/neo4j/plugins:/plugins
   #     - /opt/dockerstore/neo4j/logs:/var/lib/neo4j/logs
 
+  minio:
+    container_name: minio
+    image: minio/minio:RELEASE.2024-11-07T00-52-20Z
+    environment:
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+    ports:
+      - "9001:9001"
+      - "9000:9000"
+    volumes:
+      - /opt/dockerstore/minio/data:/data
+      # - /opt/dockerstore/minio/config:/root/.minio  # 配置存储
+    command: minio server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9001/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
   jenkins:
     image: jenkins/jenkins:2.462.2-lts-jdk17
     container_name: jenkins
@@ -285,7 +306,7 @@ services:
     image: nacos/nacos-server:v2.4.2
     container_name: nacos
     privileged: true
-    # restart: always
+    restart: always
     environment:
       TZ: Asia/Shanghai
       MODE: standalone
@@ -381,14 +402,9 @@ services:
     image: kong:3.5
     container_name: kong
     # restart: always
-    depends_on:
-      consul:
-        condition: service_started
-      postgres:
-        condition: service_started
     environment:
       KONG_DATABASE: postgres
-      # KONG_PG_HOST: postgres
+      KONG_PG_HOST: postgres
       KONG_PG_USER: postgres
       KONG_PG_PASSWORD: postgres
       KONG_PROXY_ACCESS_LOG: /dev/stdout
@@ -396,20 +412,24 @@ services:
       KONG_PROXY_ERROR_LOG: /dev/stderr
       KONG_ADMIN_ERROR_LOG: /dev/stderr
       KONG_ADMIN_LISTEN: 0.0.0.0:8001
-      #KONG_DNS_RESOLVER: "172.18.0.3:8600"  # 这里使用实际的 Consul IP 地址
-      KONG_CONSUL_HOST: consul
       KONG_LOG_LEVEL: info
-    command: >
-      kong start -c /etc/kong/kong.conf
     volumes:
+      - /opt/dockerstore/kong/init_kong.sh:/docker-entrypoint.d/init_kong.sh
       - /opt/dockerstore/kong/config/kong.conf:/etc/kong/kong.conf # 挂载本地的kong.conf配置文件
       - /opt/dockerstore/kong/custom_plugins:/usr/local/kong/custom_plugins # 挂载本地自定义插件目录
+    command: >
+      kong start -c /etc/kong/kong.conf
     ports:
       - "8000:8000" # Proxy端口
       - "8002:8002" # gui
       - "8443:8443" # Proxy HTTPS端口
       - "8001:8001" # 管理API端口
       - "8444:8444" # 管理API HTTPS端口
+    depends_on:
+      consul:
+        condition: service_started
+      postgres:
+        condition: service_started
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8001/status"]
       interval: 10s
@@ -417,17 +437,19 @@ services:
       retries: 5
     networks:
       - my-network
+
   konga:
     image: pantsel/konga:latest
     container_name: konga
     environment:
       NODE_ENV: production
       # DB_ADAPTER: postgres
-      # DB_HOST: 172.18.0.2
+      # DB_HOST: postgres
       # DB_PORT: 5432
       # DB_USER: postgres
       # DB_PASSWORD: postgres
       # DB_DATABASE: konga
+      # DB_URI: postgres://postgres:postgres@postgres:5432/kong
     ports:
       - "1337:1337/tcp"
     depends_on:
@@ -518,6 +540,104 @@ services:
     networks:
       prometheus:
         ipv4_address: 172.22.0.33
+
+  # 生成 elastic-certificates.p12
+  cert_generator:
+    image: elasticsearch:7.14.1
+    container_name: cert_generator
+    environment:
+      - discovery.type=single-node
+    # 生成秘钥
+    # ./bin/elasticsearch-certutil ca
+
+    #./bin/elasticsearch-certutil cert --ca elastic-stack-ca.p12
+    # volumes:
+    #   - /opt/dockerstore/elasticsearch/config/:/usr/share/elasticsearch/config
+
+  es01:
+    image: elasticsearch:7.14.1
+    container_name: es01
+    environment:
+      - node.name=es01
+      - cluster.name=es-docker-cluster
+      - discovery.seed_hosts=es02,es03
+      - cluster.initial_master_nodes=es01,es02,es03
+      - bootstrap.memory_lock=true
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - /opt/dockerstore/elasticsearch/data/es01-data/:/usr/share/elasticsearch/data
+      - /opt/dockerstore/elasticsearch/config/elasticsearch.yml:/usr/share/elasticsearch/config/elasticsearch.yml
+      - /opt/dockerstore/elasticsearch/config/elastic-certificates.p12:/usr/share/elasticsearch/config/elastic-certificates.p12
+    ports:
+      - 9201:9200
+  es02:
+    image: elasticsearch:7.14.1
+    container_name: es02
+    environment:
+      - node.name=es02
+      - cluster.name=es-docker-cluster
+      - discovery.seed_hosts=es01,es03
+      - cluster.initial_master_nodes=es01,es02,es03
+      - bootstrap.memory_lock=true
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    volumes:
+      - /opt/dockerstore/elasticsearch/data/es02-data/:/usr/share/elasticsearch/data
+      - /opt/dockerstore/elasticsearch/config/elasticsearch.yml:/usr/share/elasticsearch/config/elasticsearch.yml
+      - /opt/dockerstore/elasticsearch/config/elastic-certificates.p12:/usr/share/elasticsearch/config/elastic-certificates.p12
+    ports:
+      - 9202:9200
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+
+  es03:
+    image: elasticsearch:7.14.1
+    container_name: es03
+    environment:
+      - node.name=es03
+      - cluster.name=es-docker-cluster
+      - discovery.seed_hosts=es01,es02
+      - cluster.initial_master_nodes=es01,es02,es03
+      - bootstrap.memory_lock=true
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - /opt/dockerstore/elasticsearch/data/es03-data/:/usr/share/elasticsearch/data
+      - /opt/dockerstore/elasticsearch/config/elasticsearch.yml:/usr/share/elasticsearch/config/elasticsearch.yml
+      - /opt/dockerstore/elasticsearch/config/elastic-certificates.p12:/usr/share/elasticsearch/config/elastic-certificates.p12
+    ports:
+      - 9203:9200
+
+  kibana:
+    image: kibana:7.14.1
+    container_name: kibana01
+    volumes:
+      - /opt/dockerstore/kibana/config/kibana.yml:/usr/share/kibana/config/kibana.yml
+    environment:
+      - ELASTICSEARCH_HOSTS=http://es01:9200
+      - ELASTICSEARCH_URL=http://es01:9200
+      - I18N_LOCALE=zh-CN
+    ports:
+      - "5602:5601"
+    depends_on:
+      - es01
+
+  # 监控集群信息
+  cerebro:
+    image: lmenezes/cerebro:0.9.4
+    container_name: cerebro
+    environment:
+      - CEREBRO_HOSTS=http://es01:9200
+    ports:
+      - "9000:9000"
 
 networks:
   my-network:
