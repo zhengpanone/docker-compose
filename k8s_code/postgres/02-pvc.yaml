@@ -1,0 +1,13 @@
+# 2. 创建 Persistent Volume Claim (PVC)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-pvc # PVC 名称
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+  #  通过设置为空字符串，它才会去寻找没有 StorageClass 的 PV
+  storageClassName: ""    

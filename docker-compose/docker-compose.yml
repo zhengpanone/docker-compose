@@ -1,0 +1,923 @@
+services:
+  portainer:
+    image: portainer/portainer:latest
+    container_name: portainer
+    ports:
+      - "9000:9000"
+    volumes:
+      - /opt/dockerstore/portainer/data:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+
+  rancher:
+    image: rancher/rancher:v2.10-head
+    privileged: true
+    container_name: rancher
+    restart: unless-stopped
+    ports:
+      - "18080:80" # HTTP 访问端口
+      - "18443:443" # HTTPS 访问端口
+    volumes:
+      - /opt/dockerstore/rancher:/var/lib/rancher # 数据持久化
+    environment:
+      - CATTLE_BOOTSTRAP_PASSWORD=admin123 # 初始密码，启动后可更改
+
+  registry:
+    image: registry:latestEE
+    container_name: registry
+    hostname: registry
+    ports:
+      - "5001:5001"
+    volumes:
+      - /opt/dockerstore/registry:/var/lib/registry # 数据持久化
+    environment:
+      REGISTRY_HTTP_ADDR: :5001 # 配置 Docker Registry 监听的端口
+    restart: unless-stopped # 除非手动停止，否则总是重启
+
+  registry-browser:
+    image: klausmeyer/docker-registry-browser:latest
+    container_name: registry-browser
+    ports:
+      - "5002:8080"
+    environment:
+      SECRET_KEY_BASE: "123456"
+      # 替换为你自己的内网IP
+      DOCKER_REGISTRY_URL: "http://registry:5001/v2"
+    depends_on:
+      - registry # 确保 registry 服务先启动
+    restart: unless-stopped
+
+  mysql:
+    hostname: mysql
+    container_name: "mysql"
+    # image: mysql:5.7
+    image: mysql:8.0.24
+    privileged: true
+    restart: always
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: "root"
+      # MYSQL_ALLOW_EMPTY_PASSWORD: 'no'
+      TZ: Asia/Shanghai
+    volumes:
+      - "/mysql/data:/var/lib/mysql"
+      - "${DATA_PATH}/mysql/logs:/var/log/mysql"
+      - "${DATA_PATH}/mysql/conf.d/:/etc/mysql/conf.d/"
+    # - ./init:/docker-entrypoint-initdb.d/   # sql初始化目录
+    command: --max_connections=1000
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_general_ci
+      --default-authentication-plugin=mysql_native_password
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "mysqladmin",
+          "ping",
+          "-h",
+          "localhost",
+          "-uroot",
+          "-p${MYSQL_ROOT_PASSWORD:-root}",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 2048m
+          cpus: "2"
+    networks:
+      - my-network
+
+  postgres:
+    image: postgres:16.10-alpine
+    container_name: postgres
+    hostname: postgres
+    restart: always
+    privileged: true
+    user: root
+    environment:
+      LANG: "en_US.utf8"
+      LC_ALL: "en_US.utf8"
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - 15432:5432
+    volumes:
+      - "/mnt/d/dockerstore/postgres/data1:/var/lib/postgresql/data"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: "0.5"
+    networks:
+      - my-network
+
+  # oracle_11g:
+  #   image: registry.cn-hangzhou.aliyuncs.com/helowin/oracle_11g:latest
+  #   container_name: oracle_11g
+  #   ports:
+  #     - 1521:1521
+  # volumes:
+  #   - /opt/dockerstore/oracle_11g/data:/home/oracle/app/oracle/oradata
+  # restart: always
+
+  redis:
+    container_name: redis
+    image: redis
+    hostname: redis
+    privileged: true
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - /opt/dockerstore/redis/redis.conf:/etc/redis/redis.conf
+      - /opt/dockerstore/redis/data:/data
+    command: redis-server /etc/redis/redis.conf
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          memory: 2048m
+          cpus: "0.5"
+    networks:
+      - my-network
+  # 容器内执行：mongo -u root -p root --authenticationDatabase admin
+  mongodb:
+    container_name: mongodb
+    hostname: mogodb
+    image: mongo:5.0.10-focal
+    # restart: always
+    ports:
+      - "27017:27017"
+    command:
+      - "--auth"
+      - "--wiredTigerCacheSizeGB=2"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: root
+    volumes:
+      - "/opt/dockerstore/mongo/data:/data/db"
+      - "/opt/dockerstore/mongo/logs:/var/log/mongodb"
+      - "/opt/dockerstore/mongo/config:/etc/mongo"
+      # - "/usr/share/zoneinfo/Asia/Shanghai:/etc/localtime"
+    healthcheck:
+      test: ["CMD", "mongo", "--eval", "db.adminCommand('ping')"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m" # 每个日志文件最大 10MB
+        max-file: "5" # 最多保留 5 个日志文件
+
+  mongo-express:
+    image: mongo-express
+    container_name: mongo-express
+    # restart: always
+    ports:
+      - "8081:8081"
+    environment:
+      ME_CONFIG_MONGODB_SERVER: mongodb
+      ME_CONFIG_MONGODB_ENABLE_ADMIN: false
+      ME_CONFIG_MONGODB_ADMINUSERNAME: root
+      ME_CONFIG_MONGODB_ADMINPASSWORD: root
+      ME_CONFIG_BASICAUTH_USERNAME: root
+      ME_CONFIG_BASICAUTH_PASSWORD: root
+      # ME_CONFIG_MONGODB_URL: mongodb://root:root@mongo:27017/
+    depends_on:
+      - mongodb
+
+  nginx:
+    container_name: nginx
+    image: nginx
+    ports:
+      - "9998:80"
+    environment:
+      TZ: Asia/Shanghai
+    volumes:
+      - /opt/dockerstore/nginx/html:/etc/nginx/html
+      - /opt/dockerstore/nginx/conf.d:/etc/nginx/conf.d
+      - /opt/dockerstore/nginx/log:/var/log/nginx
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9998"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  nginx-ui:
+    image: "uozi/nginx-ui:latest"
+    stdin_open: true
+    tty: true
+    container_name: nginx-ui
+    restart: always
+    environment:
+      - TZ=Asia/Shanghai
+    volumes:
+      - "/opt/dockerstore/nginx-ui/nginx:/etc/nginx"
+      - "/opt/dockerstore/nginx-ui/nginx-ui:/etc/nginx-ui"
+      - "/opt/dockerstore/nginx-ui/var/www:/var/www"
+    ports:
+      - 18080:80
+      - 18443:443
+
+  # spug:
+  #   image: openspug/spug-service
+  #   container_name: spug
+  #   privileged: true
+  #   restart: always
+  #   volumes:
+  #     - /data/spug/service:/data/spug
+  #     - /data/spug/repos:/data/repos
+  #   ports:
+  #     # 如果80端口被占用可替换为其他端口，例如: - "8000:80"
+  #     - "8000:80"
+  #   environment:
+  #     - MYSQL_DATABASE=spug
+  #     - MYSQL_USER=spug
+  #     - MYSQL_PASSWORD=spug.cc
+  #     - MYSQL_HOST=db
+  #     - MYSQL_PORT=3306
+  #   depends_on:
+  #     - mysql
+
+  nexus:
+    image: sonatype/nexus
+    container_name: nexus3
+    # restart: always
+    privileged: true
+    environment:
+      - TZ=Asia/Shanghai
+    ports:
+      - 18081:8081 # 此端口是用于nexus服务端口
+      - 18082:8082 # 此端口是用于host镜像仓库的服务端口
+      - 18083:8083 # 此端口是用于用户group镜像仓库的服务端口
+    volumes:
+      - /opt/dockerstore/nexus/nexus-data:/nexus-data
+
+  gitlab:
+    container_name: "gitlab"
+    hostname: "gitlab"
+    image: gitlab/gitlab-ce:latest
+    privileged: true
+    # restart: always
+    ports:
+      - "9980:80"
+      - "2224:22"
+      - "2443:443"
+    environment:
+      GITLAB_OMNIBUS_CONFIG: |
+        external_url 'http://127.0.0.1:80'
+        gitlab_rails['gitlab_shell_ssh_port'] = 2224
+      TZ: Asia/Shanghai
+    volumes:
+      - /opt/dockerstore/gitlab/config:/etc/gitlab:z
+      - /opt/dockerstore/gitlab/logs:/var/log/gitlab:z
+      - /opt/dockerstore/gitlab/data:/var/opt/gitlab:z
+
+  gogs:
+    image: gogs/gogs:latest
+    container_name: gogs
+    # restart: always
+    ports:
+      - "3000:3000" # Web 界面访问端口
+      - "222:22" # SSH 访问端口
+    volumes:
+      - /opt/dockerstore/gogs/data:/data # 持久化存储 Gogs 数据
+    environment:
+      - USER_UID=1000
+      - USER_GID=1000
+      - TZ=Asia/Shanghai
+      - DB_HOST=mysql
+      - DB_NAME=gogs
+      - DB_USER=root
+      - DB_PASSWD=root
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: "0.5"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m" # 每个日志文件最大 10MB
+        max-file: "5" # 最多保留 5 个日志文件
+    depends_on:
+      - mysql
+    networks:
+      - my-network
+
+  neo4j:
+    image: neo4j:2025.02.0-ubi9
+    container_name: neo4j
+    # restart: always
+    environment:
+      - NEO4J_AUTH=neo4j/neo4j1234 # 默认用户名密码
+      # - NEO4J_dbms_memory_heap_maxSize=4G
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - /opt/dockerstore/neo4j/data:/data
+      - /opt/dockerstore/neo4j/config:/var/lib/neo4j/conf
+      - /opt/dockerstore/neo4j/import:/var/lib/neo4j/import
+      - /opt/dockerstore/neo4j/plugins:/plugins
+      - /opt/dockerstore/neo4j/logs:/var/lib/neo4j/logs
+
+  minio:
+    container_name: minio
+    image: minio/minio:RELEASE.2024-11-07T00-52-20Z
+    environment:
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+    ports:
+      - "9001:9001"
+      - "9000:9000"
+    volumes:
+      - /opt/dockerstore/minio/data:/data
+      # - /opt/dockerstore/minio/config:/root/.minio  # 配置存储
+    command: minio server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9001/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    networks:
+      - my-network
+
+  jenkins:
+    image: jenkins/jenkins:2.513-jdk21
+    container_name: jenkins
+    # restart: always
+    privileged: true
+    environment:
+      - TZ=Asia/Shanghai
+      - JAVA_OPTS=-Xmx2048m -Xms1024m # 调整JVM内存设置
+    ports:
+      - 8085:8080
+      - 50000:50000
+    volumes:
+      - /opt/dockerstore/jenkins/jenkins-data:/var/jenkins_home
+      - /opt/dockerstore/jenkins/jenkins-docker-certs:/certs/client:ro
+      - /opt/dockerstore/jenkins/jenkins-logs:/var/log/jenkins # 日志文件持久化
+      - /var/run/docker.sock:/var/run/docker.sock # 允许Jenkins构建Docker镜像
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  nacos:
+    hostname: nacos
+    # image: nacos/nacos-server:v2.1.2
+    image: nacos/nacos-server:v2.4.2
+    container_name: nacos
+    privileged: true
+    restart: always
+    environment:
+      TZ: Asia/Shanghai
+      MODE: standalone
+      PREFER_HOST_MODE: hostname #如果支持主机名可以使用hostname,否则使用ip，默认也是ip
+      SPRING_DATASOURCE_PLATFORM: mysql #数据源平台 仅支持mysql或不保存empty
+      MYSQL_SERVICE_HOST: mysql
+      MYSQL_SERVICE_DB_NAME: nacos
+      MYSQL_SERVICE_PORT: 3306
+      MYSQL_SERVICE_USER: root
+      MYSQL_SERVICE_PASSWORD: root
+      MYSQL_DATABASE_NUM: 1
+      NACOS_APPLICATION_PORT: 8848
+      MYSQL_SERVICE_DB_PARAM: characterEncoding=utf8&connectTimeout=10000&socketTimeout=3000&autoReconnect=true&useSSL=false&serverTimezone=UTC
+      NACOS_AUTH_TOKEN: 15baf51c4de4f206e9dece30afe5208a4095d5f7f6b17b80d1b0990ea934ba7e56a6dbfc3e93b1b89ae0359f55ca22c41ed4508f1444864ee803d46d412fe63b
+    volumes:
+      - /opt/dockerstore/nacos/logs:/home/nacos/logs
+      - /opt/dockerstore/nacos/plugins:/home/nacos/plugins
+      - /opt/dockerstore/nacos/conf:/home/nacos/conf
+    ports:
+      - "8848:8848"
+      - "9848:9848"
+      # - "9849:9849"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "curl",
+          "-f",
+          "http://localhost:8848/nacos/v1/console/health/liveness",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+    networks:
+      - my-network
+
+  consul:
+    hostname: consul
+    image: consul:1.15.4
+    container_name: consul
+    restart: always
+    ports:
+      - "8300:8300" # 这是 Consul 服务器节点之间通信的端口。主要用于服务器节点间的 RPC (远程过程调用) 通信，例如进行领导选举、状态复制等。
+      - "8301:8301" # 这个端口被用于 Consul 节点之间的 Serf LAN (局域网) 通信。Serf 是一个用于集群成员管理、故障检测和编排的工具，Consul 利用它进行健康检查和跟踪集群中的成员。8301 端口使用 TCP 和 UDP 协议。
+      - "8302:8302" # 这个端口被用于 Consul 节点间的 Serf WAN (广域网) 通信。如果您有多个数据中心，它们将通过此端口相互通信确定其他数据中心的 Consul 节点的健康状况。同样，8302 端口同时支持 TCP 和 UDP 协议。
+      - "8500:8500" # Consul HTTP 界面所用的端口
+      - "8600:8600/udp" # Consul DNS 服务器所用的端口
+    command: agent -dev -ui -client 0.0.0.0 # -dev 表示启动一个开发模式的 Consul 服务，-ui 开启用户界面，-client 0.0.0.0 允许来自宿主机的所有IP连接至Consul服务
+    volumes:
+      - /opt/dockerstore/consul/data:/consul/data # 将宿主机当前目录下的 consul_data 目录挂载到容器的 /consul/data
+    healthcheck:
+      # test: ["CMD", "curl", "-f", "http://localhost:8500/v1/status/leader"]
+      test: ["CMD", "consul", "info"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: "0.5"
+    networks:
+      - my-network
+
+  jaeger:
+    container_name: jaeger
+    image: jaegertracing/all-in-one:latest
+    privileged: true
+    ports:
+      - "5775:5775/udp"
+      - "6831:6831/udp"
+      - "6832:6832/udp"
+      - "5778:5778"
+      - "16686:16686"
+      - "14268:14268"
+      - "14250:14250"
+      - "9411:9411"
+    environment:
+      COLLECTOR_ZIPKIN_HTTP_PORT: 9411
+    networks:
+      - my-network
+
+  # 用户名/密码：sentinel/sentinel
+  sentinel:
+    image: bladex/sentinel-dashboard:1.8.4
+    container_name: sentinel-dashboard
+    ports:
+      - "8858:8858"
+    environment:
+      JAVA_OPTS: "-Dserver.port=8858 -Dcsp.sentinel.dashboard.server=localhost:8858 -Dproject.name=sentinel-dashboard"
+
+  # Kong Migrations，用于初始化数据库
+  kong-migrations:
+    image: kong:3.5
+    container_name: kong-migrations
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      KONG_DATABASE: postgres
+      KONG_PG_HOST: postgres
+      KONG_PG_USER: postgres
+      KONG_PG_PASSWORD: postgres
+    command: ["kong", "migrations", "bootstrap"]
+    restart: on-failure
+    networks:
+      - my-network
+
+  # Kong API 网关
+  kong:
+    image: kong:3.5
+    container_name: kong
+    # restart: always
+    environment:
+      KONG_DATABASE: postgres
+      KONG_PG_HOST: postgres
+      KONG_PG_USER: postgres
+      KONG_PG_PASSWORD: postgres
+      KONG_PROXY_ACCESS_LOG: /dev/stdout
+      KONG_ADMIN_ACCESS_LOG: /dev/stdout
+      KONG_PROXY_ERROR_LOG: /dev/stderr
+      KONG_ADMIN_ERROR_LOG: /dev/stderr
+      KONG_ADMIN_LISTEN: 0.0.0.0:8001
+      KONG_LOG_LEVEL: info
+    volumes:
+      - /opt/dockerstore/kong/init_kong.sh:/docker-entrypoint.d/init_kong.sh
+      - /opt/dockerstore/kong/config/kong.conf:/etc/kong/kong.conf # 挂载本地的kong.conf配置文件
+      - /opt/dockerstore/kong/custom_plugins:/usr/local/kong/custom_plugins # 挂载本地自定义插件目录
+    command: >
+      kong start -c /etc/kong/kong.conf
+    ports:
+      - "8000:8000" # Proxy端口
+      - "8002:8002" # gui
+      - "8443:8443" # Proxy HTTPS端口
+      - "8001:8001" # 管理API端口
+      - "8444:8444" # 管理API HTTPS端口
+    depends_on:
+      consul:
+        condition: service_started
+      postgres:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - my-network
+
+  konga:
+    image: pantsel/konga:latest
+    container_name: konga
+    environment:
+      NODE_ENV: production
+      # DB_ADAPTER: postgres
+      # DB_HOST: postgres
+      # DB_PORT: 5432
+      # DB_USER: postgres
+      # DB_PASSWORD: postgres
+      # DB_DATABASE: konga
+      # DB_URI: postgres://postgres:postgres@postgres:5432/kong
+    ports:
+      - "1337:1337/tcp"
+    depends_on:
+      - kong
+    volumes:
+      - /opt/dockerstore/konga/kongadata:/app/kongadata
+    networks:
+      - my-network
+
+  rabbitmq:
+    image: rabbitmq:4.0-management
+    container_name: rabbitmq
+    ports:
+      - "15672:15672"
+      - "5672:5672"
+    # hostname: rabbitmq
+    # restart: always
+    privileged: true
+    environment:
+      - TZ=Asia/Shanghai
+      - LANG=en_US.UTF-8
+      - RABBITMQ_DEFAULT_USER=admin
+      - RABBITMQ_DEFAULT_PASS=admin
+    volumes:
+      - /opt/dockerstore/rabbitmq/data:/var/lib/rabbitmq # 防止log日志报failed to open log file
+      - /opt/dockerstore/rabbitmq/conf/rabbitmq.conf/etc/rabbitmq/rabbitmq.conf
+      - /opt/dockerstore/rabbitmq/log:/var/log/rabbitmq
+
+  # grafana访问地址：http://ip地址:3000 默认登录账号密码：admin/admin
+  # prometheus访问地址: http://ip地址:9090
+  # exporter访问地址: http://ip地址:9100/metrics
+
+  # 运行
+  # docker-compose -f docker-compose-prometheus.yml -p prometheus up -d
+  # 查看grafana日志
+  # docker logs -fn10 prometheus-grafana
+  # 开源的系统监控和报警系统
+  prometheus:
+    image: prom/prometheus:v2.34.0 # 原镜像`prom/prometheus:v2.34.0`
+    container_name: prometheus
+    restart: unless-stopped
+    volumes:
+      - /opt/dockerstore/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+    command: "--config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/prometheus"
+    ports:
+      - "9090:9090"
+    depends_on:
+      - node-exporter
+    networks:
+      prometheus:
+        ipv4_address: 172.22.0.11 # 为 Prometheus 服务指定静态 IP
+
+  # 采集服务器层面的运行指标
+  node-exporter:
+    image: prom/node-exporter:v1.3.1 # 原镜像`prom/node-exporter:v1.3.1`
+    container_name: prometheus-node-exporter
+    restart: unless-stopped
+    ports:
+      - "9100:9100"
+    networks:
+      prometheus:
+        ipv4_address: 172.22.0.22 # 为 Node Exporter 服务指定静态 IP
+
+  # 用于UI展示
+  # https://grafana.com/docs/grafana/latest/installation/docker
+  grafana:
+    image: grafana:8.0.0 # 原镜像`grafana/grafana:8.0.0`
+    container_name: prometheus-grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - "/opt/dockerstore/grafana/grafana.ini:/etc/grafana/grafana.ini" # 邮箱配置
+    #      - "./prometheus/grafana/grafana-storage:/var/lib/grafana"
+    #      - "./prometheus/grafana/public:/usr/share/grafana/public" # 这里面可处理汉化包 可参考 https://github.com/WangHL0927/grafana-chinese
+    #      - "./prometheus/grafana/conf:/usr/share/grafana/conf"
+    #      - "./prometheus/grafana/log:/var/log/grafana"
+    #      - "/etc/localtime:/etc/localtime"
+    environment:
+      GF_EXPLORE_ENABLED: "true"
+      GF_SECURITY_ADMIN_PASSWORD: "admin"
+      GF_INSTALL_PLUGINS: "grafana-clock-panel,grafana-simple-json-datasource,alexanderzobnin-zabbix-app"
+      # 持久化到mysql数据库
+      GF_DATABASE_URL: "mysql://root:root@mysql:3306/grafana" # TODO 修改
+    depends_on:
+      - prometheus
+      - mysql
+    networks:
+      prometheus:
+        ipv4_address: 172.22.0.33
+
+  # 生成 elastic-certificates.p12
+  cert_generator:
+    image: elasticsearch:7.14.1
+    container_name: cert_generator
+    environment:
+      - discovery.type=single-node
+    # 生成秘钥
+    # ./bin/elasticsearch-certutil ca
+
+    #./bin/elasticsearch-certutil cert --ca elastic-stack-ca.p12
+    # volumes:
+    #   - /opt/dockerstore/elasticsearch/config/:/usr/share/elasticsearch/config
+
+  es01:
+    image: elasticsearch:7.14.1
+    container_name: es01
+    environment:
+      - node.name=es01
+      - cluster.name=es-docker-cluster
+      - discovery.seed_hosts=es02,es03
+      - cluster.initial_master_nodes=es01,es02,es03
+      - bootstrap.memory_lock=true
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - /opt/dockerstore/elasticsearch/data/es01-data/:/usr/share/elasticsearch/data
+      - /opt/dockerstore/elasticsearch/config/elasticsearch.yml:/usr/share/elasticsearch/config/elasticsearch.yml
+      - /opt/dockerstore/elasticsearch/config/elastic-certificates.p12:/usr/share/elasticsearch/config/elastic-certificates.p12
+    ports:
+      - 9201:9200
+      - 9301:9300 # 用于集群节点间通信
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -s http://localhost:9201/_cluster/health | grep -qE 'yellow|green'",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  es02:
+    image: elasticsearch:7.14.1
+    container_name: es02
+    environment:
+      - node.name=es02
+      - cluster.name=es-docker-cluster
+      - discovery.seed_hosts=es01,es03
+      - cluster.initial_master_nodes=es01,es02,es03
+      - bootstrap.memory_lock=true
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    volumes:
+      - /opt/dockerstore/elasticsearch/data/es02-data/:/usr/share/elasticsearch/data
+      - /opt/dockerstore/elasticsearch/config/elasticsearch.yml:/usr/share/elasticsearch/config/elasticsearch.yml
+      - /opt/dockerstore/elasticsearch/config/elastic-certificates.p12:/usr/share/elasticsearch/config/elastic-certificates.p12
+    ports:
+      - 9202:9200
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+
+  es03:
+    image: elasticsearch:7.14.1
+    container_name: es03
+    environment:
+      - node.name=es03
+      - cluster.name=es-docker-cluster
+      - discovery.seed_hosts=es01,es02
+      - cluster.initial_master_nodes=es01,es02,es03
+      - bootstrap.memory_lock=true
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - /opt/dockerstore/elasticsearch/data/es03-data/:/usr/share/elasticsearch/data
+      - /opt/dockerstore/elasticsearch/config/elasticsearch.yml:/usr/share/elasticsearch/config/elasticsearch.yml
+      - /opt/dockerstore/elasticsearch/config/elastic-certificates.p12:/usr/share/elasticsearch/config/elastic-certificates.p12
+    ports:
+      - 9203:9200
+
+  skywalking-oap:
+    image: apache/skywalking-oap-server:8.7.0-es7
+    container_name: skywalking-oap
+    # restart: always
+    # depends_on:
+    #   es7:
+    #     condition: service_healthy
+    ports:
+      - 11800:11800
+      - 12800:12800
+    environment:
+      TZ: Asia/Shanghai
+      SW_STORAGE: elasticsearch7
+      SW_STORAGE_ES_CLUSTER_NODES: es7:9200
+    healthcheck:
+      test: ["CMD-SHELL", "/skywalking/bin/swctl ch"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+
+  skywalking-ui:
+    image: apache/skywalking-ui:8.7.0
+    container_name: skywalking-ui
+    # restart: always
+    depends_on:
+      - skywalking-oap
+    ports:
+      - 18080:8080
+    environment:
+      TZ: Asia/Shanghai
+      SW_OAP_ADDRESS: http://skywalking-oap:12800
+
+  kibana:
+    image: kibana:7.14.1
+    container_name: kibana01
+    volumes:
+      - /opt/dockerstore/kibana/config/kibana.yml:/usr/share/kibana/config/kibana.yml
+    environment:
+      - ELASTICSEARCH_HOSTS=http://es01:9200
+      - ELASTICSEARCH_URL=http://es01:9200
+      - I18N_LOCALE=zh-CN
+    ports:
+      - "5602:5601"
+    depends_on:
+      - es01
+
+  # 监控集群信息
+  cerebro:
+    image: lmenezes/cerebro:0.9.4
+    container_name: cerebro
+    environment:
+      - CEREBRO_HOSTS=http://elastic:elastic@es01:9200
+    ports:
+      - "9000:9000"
+
+  etcd:
+    container_name: etcd
+    image: quay.io/coreos/etcd:v3.5.18
+    environment:
+      - ETCD_AUTO_COMPACTION_MODE=revision
+      - ETCD_AUTO_COMPACTION_RETENTION=1000
+      - ETCD_QUOTA_BACKEND_BYTES=4294967296
+      - ETCD_SNAPSHOT_COUNT=50000
+    volumes:
+      - /opt/dockerstore/etcd/data:/etcd
+    command: etcd -advertise-client-urls=http://127.0.0.1:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    networks:
+      - my-network
+
+  milvus:
+    container_name: milvus
+    image: milvusdb/milvus:v2.5.6
+    command: ["milvus", "run", "standalone"]
+    security_opt:
+      - seccomp:unconfined
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+    volumes:
+      - /opt/dockerstore/milvus/data:/var/lib/milvus
+      - /opt/dockerstore/milvus/configs/milvus.yaml:/milvus/configs/milvus.yaml
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 30s
+      start_period: 90s
+      timeout: 20s
+      retries: 3
+    ports:
+      - "19530:19530"
+      - "9091:9091"
+    depends_on:
+      - "etcd"
+      - "minio"
+    networks:
+      - my-network
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: qdrant
+    ports:
+      - "6333:6333" # REST API
+      - "6334:6334" # gRPC API
+    volumes:
+      - /opt/dockerstore/qdrant/storage:/qdrant/storage # 数据持久化
+    # restart: unless-stopped
+    networks:
+      - my-network
+
+  kafka:
+    image: bitnami/kafka:latest
+    container_name: kafka
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - /opt/dockerstore/kafka/data:/bitnami/kafka
+      - /opt/dockerstore/kafka/config/client.properties:/tmp/client.properties
+    environment:
+      - KAFKA_KRAFT_MODE=true
+      - KAFKA_CFG_NODE_ID=1 # 确保唯一
+      - KAFKA_CFG_PROCESS_ROLES=broker,controller
+      - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=1@kafka:9093 # 只配置一个控制器节点
+      - KAFKA_CFG_LISTENERS=SASL_PLAINTEXT://0.0.0.0:9092,CONTROLLER://:9093
+      - KAFKA_CFG_ADVERTISED_LISTENERS=SASL_PLAINTEXT://kafka:9092 # Kafka 告诉客户端连接我用这个地址
+      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=SASL_PLAINTEXT:SASL_PLAINTEXT,CONTROLLER:PLAINTEXT
+      - KAFKA_CFG_INTER_BROKER_LISTENER_NAME=SASL_PLAINTEXT
+      - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
+      - KAFKA_CFG_SASL_ENABLED_MECHANISMS=PLAIN
+      - KAFKA_CFG_SASL_MECHANISM_INTER_BROKER_PROTOCOL=PLAIN
+      - ALLOW_PLAINTEXT_LISTENER=yes
+      - KAFKA_CLIENT_USERS=jc
+      - KAFKA_CLIENT_PASSWORDS=jckafka
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui
+    depends_on:
+      - kafka
+    ports:
+      - "8090:8080"
+    environment:
+      - KAFKA_CLUSTERS_0_NAME=local
+      - KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS=kafka:9092
+      - KAFKA_CLUSTERS_0_PROPERTIES_SECURITY_PROTOCOL=SASL_PLAINTEXT
+      - KAFKA_CLUSTERS_0_PROPERTIES_SASL_MECHANISM=PLAIN
+      - KAFKA_CLUSTERS_0_PROPERTIES_SASL_USERNAME=jc
+      - KAFKA_CLUSTERS_0_PROPERTIES_SASL_PASSWORD=jckafka
+      - KAFKA_CLUSTERS_0_PROPERTIES_SASL_JAAS_CONFIG=org.apache.kafka.common.security.plain.PlainLoginModule required username="jc" password="jckafka";
+
+  jobmanager:
+    image: flink:1.18
+    container_name: jobmanager
+    ports:
+      - "8081:8081"
+    command: jobmanager
+    environment:
+      - JOB_MANAGER_RPC_ADDRESS=jobmanager
+
+  taskmanager:
+    image: flink:1.18
+    container_name: taskmanager
+    depends_on:
+      - jobmanager
+    command: taskmanager
+    environment:
+      - JOB_MANAGER_RPC_ADDRESS=jobmanager
+
+  metersphere:
+    image: metersphere/metersphere-ce-allinone:latest
+    container_name: metersphere
+    ports:
+      - "8081:8081"
+    volumes:
+      - /opt/dockerstore/metersphere/data:/opt/metersphere/data
+    restart: unless-stopped
+
+networks:
+  my-network:
+    driver: bridge
+  prometheus:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.22.0.0/24

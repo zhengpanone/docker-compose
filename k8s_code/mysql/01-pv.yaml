@@ -1,0 +1,17 @@
+# 1. 创建 PersistentVolume (PV) 持久化存储卷
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: mysql-pv
+  labels:
+    app: mysql
+spec:
+  capacity:
+    storage: 10Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: manual
+  hostPath:
+    path: /mnt/host/d/dockerstore/mysql/data
+    type: DirectoryOrCreate

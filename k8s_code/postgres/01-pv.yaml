@@ -1,0 +1,14 @@
+# 1. 创建 PersistentVolume (PV)
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: postgres-pv
+spec:
+  capacity:
+    storage: 5Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  hostPath:
+    path: /mnt/host/d/dockerstore/postgres/data
+    type: DirectoryOrCreate
