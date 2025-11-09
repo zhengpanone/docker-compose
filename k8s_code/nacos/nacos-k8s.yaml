@@ -1,0 +1,426 @@
+---
+# 1. 创建 PersistentVolume (PV) - Nacos 数据存储
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: nacos-data-pv
+  labels:
+    app: nacos
+    type: data
+spec:
+  capacity:
+    storage: 10Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: manual
+  hostPath:
+    path: /mnt/host/d/dockerstore/nacos/data
+    type: DirectoryOrCreate
+
+---
+# 2. 创建 PersistentVolume (PV) - Nacos 日志存储
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: nacos-logs-pv
+  labels:
+    app: nacos
+    type: logs
+spec:
+  capacity:
+    storage: 5Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: manual
+  hostPath:
+    path: /mnt/host/d/dockerstore/nacos/logs
+    type: DirectoryOrCreate
+
+---
+# 3. 创建 PersistentVolumeClaim (PVC) - Data
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nacos-data-pvc
+  namespace: default
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: manual
+  resources:
+    requests:
+      storage: 10Gi
+  selector:
+    matchLabels:
+      app: nacos
+      type: data
+
+---
+# 4. 创建 PersistentVolumeClaim (PVC) - Logs
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nacos-logs-pvc
+  namespace: default
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: manual
+  resources:
+    requests:
+      storage: 5Gi
+  selector:
+    matchLabels:
+      app: nacos
+      type: logs
+
+---
+# 5. 创建 ConfigMap (Nacos 配置)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nacos-config
+  namespace: default
+data:
+  application.properties: |
+    # Nacos 服务器配置
+    server.servlet.contextPath=/nacos
+    server.port=8848
+    
+    # 数据库配置 (使用MySQL)
+    spring.datasource.platform=mysql
+    db.num=1
+    db.url.0=jdbc:mysql://mysql-service:3306/nacos?characterEncoding=utf8&connectTimeout=1000&socketTimeout=3000&autoReconnect=true&useUnicode=true&useSSL=false&serverTimezone=UTC
+    db.user.0=root
+    db.password.0=root
+    
+    # 集群配置
+    nacos.core.auth.system.type=nacos
+    # 开启鉴权
+    nacos.core.auth.enabled=true
+
+    # 必填：服务端身份标识（必须有值）
+    nacos.core.auth.server.identity.key=cluster-id
+    # 生成 16 字符十六进制随机值 openssl rand -hex 16
+    nacos.core.auth.server.identity.value=G5gaun1D7RCquzG1FxfVbTXvHxyRau7Lk/+b8/CODis=
+
+    # 必填：用于生成 JWT 的 secret（Base64 编码，原始长度 >= 32 字节）
+    # 生成 32 字节随机并以 Base64 输出 openssl rand -base64 32
+    nacos.core.auth.plugin.nacos.token.secret.key=pWk2sc83YEztrtrcfW9PpH+fsio986ZeyBt5fkYWIc4=
+
+    # 命名空间配置
+    nacos.naming.empty-service.auto-clean=true
+    nacos.naming.empty-service.clean.initial-delay-ms=50000
+    nacos.naming.empty-service.clean.period-time-ms=30000
+    
+    # 健康检查配置
+    nacos.naming.health.check.enabled=true
+    nacos.naming.health.check.interval=5000
+    nacos.naming.health.check.timeout=3000
+    
+    # 元数据配置
+    nacos.naming.distro.task.dispatch.period=200
+    nacos.naming.distro.task.dispatch.thread-count=1
+    
+    # 日志配置
+    logging.level.com.alibaba.nacos=INFO
+    
+    # 性能优化
+    nacos.naming.distro.task.retry.delay=5000
+    nacos.naming.distro.sync.retry.delay=5000
+
+---
+# 6. 创建 Secret (Nacos 认证信息)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: nacos-secret
+  namespace: default
+type: Opaque
+stringData:
+  NACOS_USERNAME: nacos
+  NACOS_PASSWORD: nacos
+  MYSQL_ROOT_PASSWORD: root
+  MYSQL_HOST: mysql-service
+  MYSQL_PORT: "3306"
+
+---
+# 7. 创建 Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nacos
+  namespace: default
+  labels:
+    app: nacos
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: nacos
+  template:
+    metadata:
+      labels:
+        app: nacos
+      annotations:
+        app.kubernetes.io/depends-on: "mysql-service"
+    spec:
+      initContainers:
+      # Init Container 1: 等待 MySQL 服务就绪
+      - name: wait-for-mysql
+        image: busybox:1.35
+        imagePullPolicy: IfNotPresent
+        command:
+        - sh
+        - -c
+        - |
+          echo "⏳ 等待 MySQL 服务就绪..."
+          until nc -z ${MYSQL_HOST} ${MYSQL_PORT}; do
+            echo "📡 MySQL 服务尚未就绪，等待 3 秒..."
+            sleep 3
+          done
+          echo "✅ MySQL 服务已就绪"
+        env:
+        - name: MYSQL_HOST
+          valueFrom:
+            secretKeyRef:
+              name: nacos-secret
+              key: MYSQL_HOST
+        - name: MYSQL_PORT
+          valueFrom:
+            secretKeyRef:
+              name: nacos-secret
+              key: MYSQL_PORT
+      
+      # Init Container 2: 准备 SQL 脚本
+      - name: init-nacos-db
+        image: nacos/nacos-server:v2.3.0
+        imagePullPolicy: IfNotPresent
+        command:
+        - sh
+        - -c
+        - |
+          set -e
+          echo "🚀 开始初始化 Nacos 数据库..."
+          
+          echo "🔍 检查Nacos镜像中的SQL脚本..."
+          if [ -f /home/nacos/conf/mysql-schema.sql ]; then
+            echo "📄 找到SQL脚本文件: /home/nacos/conf/mysql-schema.sql"
+            cp /home/nacos/conf/mysql-schema.sql /tmp/mysql-schema.sql
+            echo "✅ SQL脚本已复制到共享目录"
+          else
+            echo "❌ 未找到SQL脚本文件，无法进行数据库初始化"
+            exit 1
+          fi
+          
+          echo "🎉 Nacos 数据库初始化脚本准备完成！"
+        volumeMounts:
+        - name: shared-sql
+          mountPath: /tmp
+      
+      # Init Container 3: 执行数据库初始化
+      - name: execute-db-script
+        image: mysql:8.0.24
+        imagePullPolicy: IfNotPresent
+        command:
+        - sh
+        - -c
+        - |
+          set -e
+          echo "🚀 开始执行数据库初始化脚本..."
+          
+          echo "⏳ 等待SQL脚本文件准备..."
+          while [ ! -f /tmp/mysql-schema.sql ]; do
+            echo "📄 SQL脚本文件尚未就绪，等待2秒..."
+            sleep 2
+          done
+          
+          echo "🔍 检查数据库状态..."
+          if mysql -h${MYSQL_HOST} -P${MYSQL_PORT} -uroot -p${MYSQL_ROOT_PASSWORD} -e "USE nacos" >/dev/null 2>&1; then
+            echo "📊 nacos数据库已存在，跳过初始化"
+            exit 0
+          fi
+          
+          echo "🛠 nacos 数据库不存在，准备创建..."
+          # 创建数据库（如果已存在则不会报错）
+          mysql -h"${MYSQL_HOST}" -P"${MYSQL_PORT}" -uroot -p"${MYSQL_ROOT_PASSWORD}" -e "CREATE DATABASE IF NOT EXISTS \`nacos\` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;"
+
+
+          echo "📝 执行数据库初始化脚本..."
+          mysql -h${MYSQL_HOST} -P${MYSQL_PORT} -uroot -p${MYSQL_ROOT_PASSWORD} nacos < /tmp/mysql-schema.sql
+          echo "✅ 数据库初始化完成"
+          
+          echo "🎉 Nacos数据库初始化成功！"
+        volumeMounts:
+        - name: shared-sql
+          mountPath: /tmp
+        env:
+        - name: MYSQL_HOST
+          valueFrom:
+            secretKeyRef:
+              name: nacos-secret
+              key: MYSQL_HOST
+        - name: MYSQL_PORT
+          valueFrom:
+            secretKeyRef:
+              name: nacos-secret
+              key: MYSQL_PORT
+        - name: MYSQL_ROOT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: nacos-secret
+              key: MYSQL_ROOT_PASSWORD
+      
+      containers:
+      - name: nacos
+        image: nacos/nacos-server:v2.3.0
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8848
+          name: http
+          protocol: TCP
+        - containerPort: 9848
+          name: grpc
+          protocol: TCP
+        env:
+        - name: MODE
+          value: "standalone"
+        - name: SPRING_DATASOURCE_PLATFORM
+          value: "mysql"
+        # 启用 NACOS 服务端鉴权
+        - name: NACOS_AUTH_ENABLE
+          value: "true"
+        - name: NACOS_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: nacos-secret
+              key: NACOS_USERNAME
+        - name: NACOS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: nacos-secret
+              key: NACOS_PASSWORD
+        - name: MYSQL_SERVICE_HOST
+          valueFrom:
+            secretKeyRef:
+              name: nacos-secret
+              key: MYSQL_HOST
+        - name: MYSQL_SERVICE_PORT
+          valueFrom:
+            secretKeyRef:
+              name: nacos-secret
+              key: MYSQL_PORT
+        - name: MYSQL_SERVICE_DB_NAME
+          value: "nacos"
+        - name: MYSQL_SERVICE_USER
+          value: "root"
+        - name: MYSQL_SERVICE_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: nacos-secret
+              key: MYSQL_ROOT_PASSWORD
+        - name: JVM_XMS
+          value: "512m"
+        - name: JVM_XMX
+          value: "512m"
+        - name: JVM_XMN
+          value: "256m"
+        volumeMounts:
+        - name: nacos-data
+          mountPath: /home/nacos/data
+        - name: nacos-logs
+          mountPath: /home/nacos/logs
+        - name: nacos-config
+          mountPath: /home/nacos/conf/application.properties
+          subPath: application.properties
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+        livenessProbe:
+          httpGet:
+            path: /nacos/actuator/health
+            port: 8848
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /nacos/actuator/health
+            port: 8848
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+      
+      volumes:
+      - name: nacos-data
+        persistentVolumeClaim:
+          claimName: nacos-data-pvc
+      - name: nacos-logs
+        persistentVolumeClaim:
+          claimName: nacos-logs-pvc
+      - name: nacos-config
+        configMap:
+          name: nacos-config
+          items:
+          - key: application.properties
+            path: application.properties
+      - name: shared-sql
+        emptyDir: {}
+
+---
+# 8. 创建 Service (ClusterIP - 集群内访问)
+apiVersion: v1
+kind: Service
+metadata:
+  name: nacos-service
+  namespace: default
+  labels:
+    app: nacos
+spec:
+  selector:
+    app: nacos
+  type: ClusterIP
+  ports:
+  - port: 8848
+    targetPort: 8848
+    protocol: TCP
+    name: http
+  - port: 9848
+    targetPort: 9848
+    protocol: TCP
+    name: grpc
+
+---
+# 9. 创建 Service (NodePort - 外部访问)
+apiVersion: v1
+kind: Service
+metadata:
+  name: nacos-service-nodeport
+  namespace: default
+  labels:
+    app: nacos
+spec:
+  selector:
+    app: nacos
+  type: NodePort
+  ports:
+  - port: 8848
+    targetPort: 8848
+    nodePort: 30848
+    protocol: TCP
+    name: http
+  - port: 9848
+    targetPort: 9848
+    nodePort: 30948
+    protocol: TCP
+    name: grpc
