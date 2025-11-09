@@ -3,6 +3,9 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: postgres
+  namespace: default
+  labels:
+    app: postgres 
 spec:
   replicas: 1
   selector:
@@ -16,6 +19,7 @@ spec:
       containers:
       - name: postgres
         image: postgres:16.10-alpine
+        imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 5432
           name: postgres

@@ -92,7 +92,7 @@ kubectl exec -it <nginx-pod-name> -- nginx -t
 ## 重新加载配置:
 ```bash
 # 修改 ConfigMap 后
-kubectl apply -f nginx-k8s-complete.yaml
+kubectl apply -f nginx-k8s.yaml
 
 # 重启 Deployment
 kubectl rollout restart deployment nginx
