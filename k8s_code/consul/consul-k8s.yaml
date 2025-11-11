@@ -24,6 +24,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: consul-data-pvc
+  namespace: default
 spec:
   accessModes:
     - ReadWriteOnce
@@ -37,64 +38,15 @@ spec:
       type: data
 
 ---
-# 3. ConfigMap (Consul Server Config)
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: consul-config
-data:
-  server.json: |
-    {
-      "datacenter": "dc1",
-      "data_dir": "/consul/data",
-      "log_level": "INFO",
-      "node_name": "consul-server",
-      "server": true,
-      "bootstrap_expect": 1,
-      "client_addr": "0.0.0.0",
-      "ui_config": {
-        "enabled": true,
-        "tls": {
-          "cert_file": "/consul/tls/tls.crt",
-          "key_file": "/consul/tls/tls.key"
-        }
-      },
-      "ports": {
-        "http": 8500,
-        "https": 8501,
-        "grpc": 8502,
-        "dns": 8600,
-        "serf_lan": 8301,
-        "serf_wan": 8302,
-        "server": 8300
-      },
-      "connect": { "enabled": true },
-      "acl": {
-        "enabled": true,
-        "default_policy": "deny",
-        "enable_token_persistence": true
-      }
-    }
-
----
-# 4. Placeholder Secret (ACL token + Gossip key)
-apiVersion: v1
-kind: Secret
-metadata:
-  name: consul-secret
-type: Opaque
-stringData:
-  CONSUL_HTTP_TOKEN: "placeholder"
-  GOSSIP_ENCRYPTION_KEY: "uDBM8L3pWz1R4X7jV9qN5tY2mK6cH8sB0"
-
----
-# 5. StatefulSet (Consul Server)
+# 3. 创建 Deployment
 apiVersion: apps/v1
-kind: StatefulSet
+kind: Deployment
 metadata:
   name: consul
+  namespace: default
+  labels:
+    app: consul
 spec:
-  serviceName: consul-headless
   replicas: 1
   selector:
     matchLabels:
@@ -107,178 +59,85 @@ spec:
       containers:
       - name: consul
         image: consul:1.15.4
-        ports:
-        - containerPort: 8500
-          name: http
-        - containerPort: 8501
-          name: https
-        - containerPort: 8600
-          name: dns
-        - containerPort: 8300
-          name: server
-        - containerPort: 8301
-          name: serf-lan
-        - containerPort: 8302
-          name: serf-wan
-        env:
-        - name: CONSUL_LOCAL_CONFIG
-          valueFrom:
-            configMapKeyRef:
-              name: consul-config
-              key: server.json
-        - name: CONSUL_HTTP_TOKEN
-          valueFrom:
-            secretKeyRef:
-              name: consul-secret
-              key: CONSUL_HTTP_TOKEN
-        - name: GOSSIP_ENCRYPTION_KEY
-          valueFrom:
-            secretKeyRef:
-              name: consul-secret
-              key: GOSSIP_ENCRYPTION_KEY
         command:
         - consul
+        args:
         - agent
-        - -config-dir=/consul/config
-        - -data-dir=/consul/data
-        - -bind=0.0.0.0
-        - -client=0.0.0.0
+        - -dev
+        - -ui
+        - -client
+        - 0.0.0.0
+        ports:
+        - containerPort: 8300
+          name: server
+          protocol: TCP
+        - containerPort: 8301
+          name: serf-lan
+          protocol: TCP
+        - containerPort: 8302
+          name: serf-wan
+          protocol: TCP
+        - containerPort: 8500
+          name: http
+          protocol: TCP
+        - containerPort: 8600
+          name: dns
+          protocol: UDP
         volumeMounts:
         - name: data
           mountPath: /consul/data
-        - name: config
-          mountPath: /consul/config
-        - name: tls
-          mountPath: /consul/tls
+        livenessProbe:
+          exec:
+            command:
+            - consul
+            - info
+          initialDelaySeconds: 20
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 5
+        resources:
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
       volumes:
       - name: data
         persistentVolumeClaim:
-          claimName: consul-data-pvc
-      - name: config
-        configMap:
-          name: consul-config
-          items:
-          - key: server.json
-            path: server.json
-      - name: tls
-        secret:
-          secretName: consul-ui-tls
-
+          claimName: consul-data-pvc  # 改为使用 PVC，而不是 hostPath
 ---
-# 6. Headless Service
-apiVersion: v1
-kind: Service
-metadata:
-  name: consul-headless
-spec:
-  clusterIP: None
-  selector:
-    app: consul
-  ports:
-  - port: 8500
-    name: http
-  - port: 8501
-    name: https
-  - port: 8600
-    name: dns
-  - port: 8300
-    name: server
-  - port: 8301
-    name: serf-lan
-  - port: 8302
-    name: serf-wan
-
----
-# 7. ClusterIP Service
+# 4. 创建 Service (NodePort - 外部访问)
 apiVersion: v1
 kind: Service
 metadata:
   name: consul-service
-spec:
-  selector:
+  namespace: default
+  labels:
     app: consul
-  type: ClusterIP
-  ports:
-  - port: 8500
-    targetPort: 8500
-    name: http
-  - port: 8600
-    targetPort: 8600
-    name: dns
-
----
-# 8. NodePort Service
-apiVersion: v1
-kind: Service
-metadata:
-  name: consul-service-nodeport
 spec:
   selector:
     app: consul
   type: NodePort
   ports:
+  - port: 8300
+    targetPort: 8300
+    nodePort: 30000  # 改为 30000-32767 范围内
+    name: server
+  - port: 8301
+    targetPort: 8301
+    nodePort: 30001  # 改为 30000-32767 范围内
+    name: serf-lan
+  - port: 8302
+    targetPort: 8302
+    nodePort: 30002  # 改为 30000-32767 范围内
+    name: serf-wan
   - port: 8500
     targetPort: 8500
-    nodePort: 30500
+    nodePort: 30003  # 改为 30000-32767 范围内
     name: http
-  - port: 8501
-    targetPort: 8501
-    nodePort: 30444
-    name: https
   - port: 8600
     targetPort: 8600
-    nodePort: 30600
+    nodePort: 30004  # 改为 30000-32767 范围内
     name: dns
-
----
-# 9. Bootstrap Job (自动生成 TLS + ACL)
-apiVersion: batch/v1
-kind: Job
-metadata:
-  name: consul-bootstrap
-spec:
-  backoffLimit: 1
-  template:
-    spec:
-      containers:
-      - name: bootstrap
-        image: bitnami/kubectl:1.27.3
-        command:
-        - bash
-        - -c
-        - |
-          set -euo pipefail
-
-          POD="consul-0"
-          echo "等待 Pod 就绪..."
-          kubectl wait --for=condition=ready pod/$POD --timeout=180s
-
-          echo "生成自签名 TLS..."
-          mkdir -p /tmp/cert
-          openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-            -keyout /tmp/cert/tls.key \
-            -out /tmp/cert/tls.crt \
-            -subj "/CN=consul.local"
-
-          echo "创建 TLS Secret..."
-          kubectl create secret tls consul-ui-tls \
-            --cert=/tmp/cert/tls.crt \
-            --key=/tmp/cert/tls.key \
-            -o yaml --dry-run=client | kubectl apply -f -
-
-          echo "执行 ACL bootstrap..."
-          OUT=$(kubectl exec $POD -- consul acl bootstrap -format=json)
-          TOKEN=$(echo $OUT | jq -r '.SecretID')
-          echo "Bootstrap token: $TOKEN"
-
-          echo "更新 Secret..."
-          kubectl create secret generic consul-secret \
-            --from-literal=CONSUL_HTTP_TOKEN=$TOKEN \
-            --from-literal=GOSSIP_ENCRYPTION_KEY=uDBM8L3pWz1R4X7jV9qN5tY2mK6cH8sB0 \
-            -o yaml --dry-run=client | kubectl apply -f -
-
-          echo "滚动更新 StatefulSet 注入 Token..."
-          TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          kubectl patch statefulset consul -p "{\"spec\":{\"template\":{\"metadata\":{\"annotations\":{\"acl-bootstrap-time\":\"$TIMESTAMP\"}}}}}"
-
-      restartPolicy: Never
+    protocol: UDP
