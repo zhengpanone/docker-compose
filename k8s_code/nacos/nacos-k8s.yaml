@@ -83,6 +83,9 @@ kind: ConfigMap
 metadata:
   name: nacos-config
   namespace: default
+  labels:
+    app: nacos
+    type: config
 data:
   application.properties: |
     # Nacos 服务器配置
@@ -421,6 +424,6 @@ spec:
     name: http
   - port: 9848
     targetPort: 9848
-    nodePort: 30948
+    nodePort: 31848
     protocol: TCP
     name: grpc

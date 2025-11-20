@@ -1,0 +1,504 @@
+---
+# 1. 创建 PersistentVolume (PV) - 存储 Jaeger 数据
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: jaeger-data-pv
+  labels:
+    app: jaeger
+    type: data
+spec:
+  capacity:
+    storage: 10Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: manual
+  hostPath:
+    path: /mnt/host/d/dockerstore/jaeger/data
+    type: DirectoryOrCreate
+
+---
+# 2. 创建 PersistentVolume (PV) - 存储日志
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: jaeger-logs-pv
+  labels:
+    app: jaeger
+    type: logs
+spec:
+  capacity:
+    storage: 5Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: manual
+  hostPath:
+    path: /mnt/host/d/dockerstore/jaeger/logs
+    type: DirectoryOrCreate
+
+---
+# 3. 创建 PersistentVolumeClaim (PVC) - Data
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: jaeger-data-pvc
+  namespace: default
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: manual
+  resources:
+    requests:
+      storage: 10Gi
+  selector:
+    matchLabels:
+      app: jaeger
+      type: data
+
+---
+# 4. 创建 PersistentVolumeClaim (PVC) - Logs
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: jaeger-logs-pvc
+  namespace: default
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: manual
+  resources:
+    requests:
+      storage: 5Gi
+  selector:
+    matchLabels:
+      app: jaeger
+      type: logs
+
+---
+# 5. 创建 ConfigMap (Jaeger 配置)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: jaeger-config
+  namespace: default
+  labels:
+    app: jaeger
+data:
+  # Jaeger 采样策略配置
+  sampling-strategies.json: |
+    {
+      "service_strategies": [
+        {
+          "service": "important-service",
+          "type": "probabilistic",
+          "param": 1.0
+        }
+      ],
+      "default_strategy": {
+        "type": "probabilistic",
+        "param": 0.1
+      }
+    }
+  
+  # Jaeger UI 配置
+  ui-config.json: |
+    {
+      "monitor": {
+        "menuEnabled": true
+      },
+      "dependencies": {
+        "menuEnabled": true
+      },
+      "archiveEnabled": true,
+      "tracking": {
+        "gaID": null,
+        "trackErrors": true
+      }
+    }
+  
+  # Badger 存储配置
+  badger-config.yaml: |
+    # Badger 数据库配置
+    ephemeral: false
+    consistency: true
+    maintenance_interval: 5m
+    metrics_update_interval: 10s
+
+---
+# 6. 创建 Job - 初始化 Jaeger 数据目录
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: jaeger-init-data
+  namespace: default
+spec:
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: init
+        image: busybox:1.36
+        command: ['sh', '-c']
+        args:
+          - |
+            echo "开始初始化 Jaeger 数据目录..."
+            
+            # 创建必要的目录结构
+            mkdir -p /badger/data
+            mkdir -p /badger/keys
+            mkdir -p /logs
+            
+            # 设置权限
+            chmod -R 755 /badger
+            chmod -R 755 /logs
+            
+            echo "✓ Jaeger 数据目录初始化完成"
+            
+            echo "数据目录结构："
+            ls -lhR /badger/
+            ls -lh /logs/
+        volumeMounts:
+        - name: data
+          mountPath: /badger
+        - name: logs
+          mountPath: /logs
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: jaeger-data-pvc
+      - name: logs
+        persistentVolumeClaim:
+          claimName: jaeger-logs-pvc
+
+---
+# 7. 创建 Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jaeger
+  namespace: default
+  labels:
+    app: jaeger
+    version: "1.53"
+    component: tracing
+spec:
+  replicas: 1  # all-in-one 版本运行单实例
+  strategy:
+    type: Recreate  # 使用持久化存储，采用重建策略
+  selector:
+    matchLabels:
+      app: jaeger
+  template:
+    metadata:
+      labels:
+        app: jaeger
+        version: "1.53"
+        component: tracing
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "14269"
+        prometheus.io/path: "/metrics"
+    spec:
+      securityContext:
+        fsGroup: 10001
+        runAsNonRoot: false
+      containers:
+      - name: jaeger
+        image: jaegertracing/all-in-one:1.53
+        imagePullPolicy: IfNotPresent
+        
+        ports:
+        # Agent 端口
+        - containerPort: 5775
+          name: zipkin-compact
+          protocol: UDP
+        - containerPort: 6831
+          name: jaeger-compact
+          protocol: UDP
+        - containerPort: 6832
+          name: jaeger-binary
+          protocol: UDP
+        - containerPort: 5778
+          name: config-rest
+          protocol: TCP
+        
+        # Collector 端口
+        - containerPort: 14268
+          name: collector
+          protocol: TCP
+        - containerPort: 14250
+          name: grpc
+          protocol: TCP
+        - containerPort: 9411
+          name: zipkin
+          protocol: TCP
+        
+        # Query/UI 端口
+        - containerPort: 16686
+          name: ui
+          protocol: TCP
+        
+        # Admin 端口
+        - containerPort: 14269
+          name: admin
+          protocol: TCP
+        
+        env:
+        # ============ 基础配置 ============
+        - name: COLLECTOR_ZIPKIN_HTTP_PORT
+          value: "9411"
+        
+        - name: LOG_LEVEL
+          value: "info"
+        
+        # ============ 存储配置 ============
+        - name: SPAN_STORAGE_TYPE
+          value: "badger"
+        
+        - name: BADGER_EPHEMERAL
+          value: "false"
+        
+        - name: BADGER_DIRECTORY_VALUE
+          value: "/badger/data"
+        
+        - name: BADGER_DIRECTORY_KEY
+          value: "/badger/keys"
+        
+        - name: BADGER_CONSISTENCY
+          value: "true"
+        
+        - name: BADGER_MAINTENANCE_INTERVAL
+          value: "5m"
+        
+        - name: BADGER_METRICS_UPDATE_INTERVAL
+          value: "10s"
+        
+        # Span 保留时间（72小时）
+        - name: BADGER_SPAN_STORE_TTL
+          value: "72h"
+        
+        # ============ Query 配置 ============
+        - name: QUERY_BASE_PATH
+          value: "/"
+        
+        - name: QUERY_UI_CONFIG
+          value: "/etc/jaeger/ui-config.json"
+        
+        - name: QUERY_MAX_CLOCK_SKEW_ADJUSTMENT
+          value: "1s"
+        
+        # ============ Collector 配置 ============
+        - name: COLLECTOR_QUEUE_SIZE
+          value: "2000"
+        
+        - name: COLLECTOR_NUM_WORKERS
+          value: "50"
+        
+        # ============ 采样策略 ============
+        - name: SAMPLING_STRATEGIES_FILE
+          value: "/etc/jaeger/sampling-strategies.json"
+        
+        - name: SAMPLING_STRATEGIES_RELOAD_INTERVAL
+          value: "1m"
+        
+        # ============ Metrics 配置 ============
+        - name: METRICS_BACKEND
+          value: "prometheus"
+        
+        - name: METRICS_HTTP_ROUTE
+          value: "/metrics"
+        
+        volumeMounts:
+        - name: jaeger-data
+          mountPath: /badger
+        - name: jaeger-logs
+          mountPath: /var/log/jaeger
+        - name: jaeger-config
+          mountPath: /etc/jaeger
+          readOnly: true
+        - name: tmp
+          mountPath: /tmp
+        
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "2000m"
+        
+        # 存活探针
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 14269
+          initialDelaySeconds: 30
+          periodSeconds: 15
+          timeoutSeconds: 5
+          failureThreshold: 5
+        
+        # 就绪探针
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 14269
+          initialDelaySeconds: 20
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 3
+        
+        # 启动探针
+        startupProbe:
+          httpGet:
+            path: /
+            port: 14269
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 30
+      
+      volumes:
+      - name: jaeger-data
+        persistentVolumeClaim:
+          claimName: jaeger-data-pvc
+      - name: jaeger-logs
+        persistentVolumeClaim:
+          claimName: jaeger-logs-pvc
+      - name: jaeger-config
+        configMap:
+          name: jaeger-config
+      - name: tmp
+        emptyDir: {}
+
+---
+# 8. 创建 Service (ClusterIP - 集群内访问)
+apiVersion: v1
+kind: Service
+metadata:
+  name: jaeger-service
+  namespace: default
+  labels:
+    app: jaeger
+    component: tracing
+spec:
+  selector:
+    app: jaeger
+  type: ClusterIP
+  sessionAffinity: ClientIP
+  ports:
+  # Agent 端口
+  - port: 5775
+    targetPort: 5775
+    protocol: UDP
+    name: zipkin-compact
+  - port: 6831
+    targetPort: 6831
+    protocol: UDP
+    name: jaeger-compact
+  - port: 6832
+    targetPort: 6832
+    protocol: UDP
+    name: jaeger-binary
+  - port: 5778
+    targetPort: 5778
+    protocol: TCP
+    name: config-rest
+  
+  # Collector 端口
+  - port: 14268
+    targetPort: 14268
+    protocol: TCP
+    name: collector
+  - port: 14250
+    targetPort: 14250
+    protocol: TCP
+    name: grpc
+  - port: 9411
+    targetPort: 9411
+    protocol: TCP
+    name: zipkin
+  
+  # Query/UI 端口
+  - port: 16686
+    targetPort: 16686
+    protocol: TCP
+    name: ui
+  
+  # Admin 端口
+  - port: 14269
+    targetPort: 14269
+    protocol: TCP
+    name: admin
+
+---
+# 9. 创建 Service (NodePort - 外部访问)
+apiVersion: v1
+kind: Service
+metadata:
+  name: jaeger-service-nodeport
+  namespace: default
+  labels:
+    app: jaeger
+    component: tracing-external
+spec:
+  selector:
+    app: jaeger
+  type: NodePort
+  ports:
+  # UI 端口
+  - port: 16686
+    targetPort: 16686
+    nodePort: 30686
+    protocol: TCP
+    name: ui
+  
+  # Collector HTTP 端口
+  - port: 14268
+    targetPort: 14268
+    nodePort: 31468
+    protocol: TCP
+    name: collector
+  
+  # Collector gRPC 端口
+  - port: 14250
+    targetPort: 14250
+    nodePort: 31450
+    protocol: TCP
+    name: grpc
+  
+  # Zipkin 兼容端口
+  - port: 9411
+    targetPort: 9411
+    nodePort: 30411
+    protocol: TCP
+    name: zipkin
+
+---
+# 10. 创建 Service (Headless - 用于服务发现)
+apiVersion: v1
+kind: Service
+metadata:
+  name: jaeger-agent
+  namespace: default
+  labels:
+    app: jaeger
+    component: agent
+spec:
+  clusterIP: None
+  selector:
+    app: jaeger
+  ports:
+  - port: 6831
+    targetPort: 6831
+    protocol: UDP
+    name: jaeger-compact
+  - port: 6832
+    targetPort: 6832
+    protocol: UDP
+    name: jaeger-binary
+  - port: 5778
+    targetPort: 5778
+    protocol: TCP
+    name: config-rest
