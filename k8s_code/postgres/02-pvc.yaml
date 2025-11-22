@@ -3,11 +3,15 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: postgres-pvc # PVC 名称
+  namespace: default
 spec:
   accessModes:
     - ReadWriteOnce
+  storageClassName: manual
   resources:
     requests:
-      storage: 5Gi
-  #  通过设置为空字符串，它才会去寻找没有 StorageClass 的 PV
-  storageClassName: ""    
+      storage: 10Gi
+
+  selector:
+    matchLabels:
+      app: postgres

@@ -1,0 +1,183 @@
+# 1. PersistentVolume - Data
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: redisinsight-data-pv
+  labels:
+    app: redisinsight
+    type: data
+spec:
+  capacity:
+    storage: 5Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: manual
+  hostPath:
+    path: /mnt/host/d/dockerstore/redisinsight/data
+    type: DirectoryOrCreate
+---
+# 2. PersistentVolume - Logs
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: redisinsight-logs-pv
+  labels:
+    app: redisinsight
+    type: logs
+spec:
+  capacity:
+    storage: 5Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: manual
+  hostPath:
+    path: /mnt/host/d/dockerstore/redisinsight/logs
+    type: DirectoryOrCreate
+---     
+# 3. PersistentVolumeClaim - Data
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: redisinsight-data-pvc
+  namespace: default
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: manual
+  resources:
+    requests:
+      storage: 5Gi
+  selector:
+    matchLabels:
+      app: redisinsight
+      type: data
+---
+# 4. PersistentVolumeClaim - Logs
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: redisinsight-logs-pvc
+  namespace: default
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: manual
+  resources:
+    requests:
+      storage: 5Gi
+  selector:
+    matchLabels:
+      app: redisinsight
+      type: logs
+--- 
+# 5. Deployment with initContainer
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redisinsight
+  namespace: default
+  labels:
+    app: redisinsight
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: redisinsight
+  template:
+    metadata:
+      labels:
+        app: redisinsight
+    spec:
+      # 添加 initContainer 修复权限
+      initContainers:
+      - name: fix-permissions
+        image: busybox:latest
+        command: 
+        - sh
+        - -c
+        - |
+          echo "Fixing permissions for /data and /logs..."
+          chown -R 1000:1000 /data
+          chown -R 1000:1000 /logs
+          chmod -R 755 /data
+          chmod -R 755 /logs
+          echo "Permissions fixed successfully"
+        volumeMounts:
+        - name: redisinsight-data
+          mountPath: /data
+        - name: redisinsight-logs
+          mountPath: /logs
+        securityContext:
+          runAsUser: 0 # initContainer 以 root 运行来修改权限
+      
+      # 主容器配置
+      containers:
+      - name: redisinsight
+        image: redis/redisinsight:2.70
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 5540
+          protocol: TCP
+        volumeMounts: 
+        - name: redisinsight-data
+          mountPath: /data
+        - name: redisinsight-logs
+          mountPath: /logs # 修复点：修改为 /logs，与 initContainer 统一
+        # 设置容器安全上下文
+        securityContext:
+          runAsUser: 1000
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+        # 生命周期探针
+        livenessProbe:
+          tcpSocket:
+            port: 5540
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          tcpSocket:
+            port: 5540
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+        # 资源限制
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+      
+      # Pod 级别的安全上下文
+      securityContext:
+        fsGroup: 1000
+      
+      volumes: 
+      - name: redisinsight-data
+        persistentVolumeClaim:
+          claimName: redisinsight-data-pvc 
+      - name: redisinsight-logs
+        persistentVolumeClaim:
+          claimName: redisinsight-logs-pvc
+---
+# 6. Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: redisinsight-service
+  namespace: default
+spec:
+  selector:
+    app: redisinsight
+  type: NodePort
+  ports:
+  - port: 80
+    targetPort: 5540
+    nodePort: 31888          
